@@ -1,10 +1,9 @@
 import os
-import pipes
-import re
 import shutil
 import subprocess
 import sys
 import logging
+from typing import Optional
 
 import argparse
 
@@ -17,7 +16,10 @@ platforms = {
 
 
 class PlatformBuilder(object):
-  cmake_args = list()
+  cmake_dir: Optional[str] = None
+  llvm_dir: Optional[str] = None
+
+  cmake_args: list[str] = list()
   cmake_build_type = "Release"
   cmake_build_verbose = False
   cmake_build_dir = ""
@@ -69,14 +71,15 @@ class PlatformBuilder(object):
       # self.cmake_args += ["-DDOBBY_GENERATE_SHARED=OFF"]
 
   def build(self):
-    subprocess.run(["mkdir", "-p", "{}".format(self.output_dir)], check=True)
+    os.makedirs(self.output_dir, exist_ok=True)
     self.cmake_generate_build_system()
 
     subprocess.run("cmake --build . --clean-first --target dobby --target dobby_static -- -j8", cwd=self.cmake_build_dir, shell=True, check=True)
 
-    os.system(f"mkdir -p {self.output_dir}")
-    os.system(f"cp {self.cmake_build_dir}/{self.shared_output_name} {self.output_dir}")
-    os.system(f"cp {self.cmake_build_dir}/{self.static_output_name} {self.output_dir}")
+    if self.shared_output_name and os.path.exists(f"{self.cmake_build_dir}/{self.shared_output_name}"):
+      shutil.copy(f"{self.cmake_build_dir}/{self.shared_output_name}", self.output_dir)
+    if self.static_output_name and os.path.exists(f"{self.cmake_build_dir}/{self.static_output_name}"):
+      shutil.copy(f"{self.cmake_build_dir}/{self.static_output_name}", self.output_dir)
 
 
 class WindowsPlatformBuilder(PlatformBuilder):
@@ -162,6 +165,10 @@ class DarwinPlatformBuilder(PlatformBuilder):
 
   @classmethod
   def lipo_create_fat(cls, project_dir, platform, output_name):
+    if not shutil.which('lipo'):
+      logging.warning("'lipo' command not found, skipping fat binary creation.")
+      return
+
     files = list()
     archs = platforms[platform]
     for arch in archs:
@@ -169,7 +176,7 @@ class DarwinPlatformBuilder(PlatformBuilder):
       files.append(file)
 
     fat_output_dir = f"{project_dir}/build/{platform}/universal"
-    subprocess.run(["mkdir", "-p", "{}".format(fat_output_dir)], check=True)
+    os.makedirs(fat_output_dir, exist_ok=True)
     cmd = ["lipo", "-create"] + files + ["-output", f"{fat_output_dir}/{output_name}"]
     subprocess.run(cmd, check=True)
 
@@ -216,12 +223,13 @@ if __name__ == "__main__":
   if arch == "all":
     archs = platforms[platform]
   else:
-    archs.append(arch)
+    archs = [arch]
   logging.info("build platform: {}, archs: {}".format(platform, archs))
 
-  builder: PlatformBuilder = None
+  builder: Optional[PlatformBuilder] = None
   for arch_ in archs:
     if platform == "macos":
+      builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
       builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
     elif platform == "iphoneos":
       builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
@@ -233,10 +241,10 @@ if __name__ == "__main__":
       logging.error("invalid platform {}".format(platform))
       sys.exit(-1)
     logging.info(
-      f"build platform: {platform}, arch: {arch_}, cmake_build_dir: {builder.cmake_build_dir}, output_dir: {builder.output_dir}"
-    )
+      f"build platform: {platform}, arch: {arch_}, cmake_build_dir: {builder.cmake_build_dir}, output_dir: {builder.output_dir}")
     builder.build()
 
-  if platform in ["iphoneos", "macos"] and arch == "all":
+  if platform in ["iphoneos", "macos"] and arch == "all" and builder:
     DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.shared_output_name)
+    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.static_output_name)
     DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.static_output_name)
