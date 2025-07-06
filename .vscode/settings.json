@@ -117,5 +117,5 @@
   },
   "C_Cpp.configurationWarnings": "Disabled",
   "lldb.showDisassembly": "auto",
-  "lldb.dereferencePointers": true,
+  "lldb.dereferencePointers": true
 }
